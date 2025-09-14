@@ -3,8 +3,9 @@ const mqtt = require('mqtt');
 const axios = require('axios');
 
 // URL API Laravel
-const SETTINGS_API = process.env.MQTT_SETTINGS_API;
-const STORE_API    = process.env.MQTT_STORE_API;
+const SETTINGS_API = 'http://127.0.0.1:8000/api/mqtt/settings';
+const STORE_API    = 'http://127.0.0.1:8000/api/mqtt/store';
+const BROKER_LOG_API = 'http://127.0.0.1:8000/api/broker/log';
 
 // Cache settings dan lastSaved
 let settings = [];
@@ -29,18 +30,45 @@ async function loadSettings() {
         const brokerUrl = `mqtt://${s.device.broker_ip}:${s.device.broker_port}`;
         const client = mqtt.connect(brokerUrl);
 
+        // Saat connect ke broker
         client.on('connect', () => {
           console.log(`✅ Connected to MQTT broker ${brokerUrl} for device ${s.device.serial_number}`);
           client.subscribe(s.topic, err => {
             if (err) console.error('❌ Error subscribe', s.topic, err.message);
             else console.log(`📡 Subscribed to topic: ${s.topic} for device ${s.device.serial_number}`);
           });
+
+          // Kirim log ke Laravel
+          axios.post(BROKER_LOG_API, {
+            broker_ip: s.device.broker_ip,
+            broker_port: s.device.broker_port,
+            status: 'connected',
+            connected_at: new Date().toISOString(),
+          }).catch(err => {
+            console.error('❌ Error posting broker log (connect):', err.message);
+          });
         });
 
+        // Saat koneksi broker tertutup
+        client.on('close', () => {
+          console.log(`⚠️ Broker connection closed for device ${s.device.serial_number}`);
+
+          axios.post(BROKER_LOG_API, {
+            broker_ip: s.device.broker_ip,
+            broker_port: s.device.broker_port,
+            status: 'disconnected',
+            disconnected_at: new Date().toISOString(),
+          }).catch(err => {
+            console.error('❌ Error posting broker log (close):', err.message);
+          });
+        });
+
+        // Saat error MQTT
         client.on('error', err => {
           console.error(`❌ MQTT Error for device ${s.device.serial_number}:`, err.message);
         });
 
+        // Saat ada pesan masuk
         client.on('message', async (topic, message) => {
           handleMessage(s, topic, message);
         });
